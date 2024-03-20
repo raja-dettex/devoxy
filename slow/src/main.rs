@@ -1,5 +1,5 @@
 use chrono::Utc;
-use axum::{response::IntoResponse, routing::*, Router};
+use axum::{http::HeaderMap, response::IntoResponse, routing::*, Router};
 use std::net::SocketAddr;
 use maud::Markup;
 
@@ -56,7 +56,8 @@ fn outer_template(body: Markup) -> Markup {
 fn now_template(title: &str) -> impl IntoResponse {
     let now = Utc::now();
 
-    
+    let mut headers = HeaderMap::new();
+    headers.insert("CACHE-CONTROL", "max-age=3700".parse().unwrap());
 
     let template = outer_template(maud::html! {
         h1 class="text-6xl" { (title) }
@@ -65,7 +66,7 @@ fn now_template(title: &str) -> impl IntoResponse {
         a class="text-blue-400 pt-16 text-xl" href="/" { "Go back home" }
     });
 
-    template
+    (headers , template)
 }
 
 // handler that responds after 5 seconds

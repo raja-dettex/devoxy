@@ -18,3 +18,10 @@ tokio = { version = "1.32.0", features = ["full"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
 lazy_static = "1.4.0"
+http-cache-semantics = "2.0.1"
+http = "1.1.0"
+sqlx = { version = "0.7", features = ["runtime-tokio", "tls-rustls", "sqlite", "uuid"] }
+uuid = { version = "1.7.0", features = ["v4"] }
+hex = "0.4.3"
+
+
