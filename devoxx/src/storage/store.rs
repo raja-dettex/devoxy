@@ -7,6 +7,8 @@ use axum::http::HeaderValue;
 use axum::{body::{self, Body, Bytes, HttpBody}, extract::Host, http::{method, uri::{self, PathAndQuery}, HeaderMap, HeaderName, Method, Request, Response, StatusCode, Uri}, response::IntoResponse, routing::*, RequestExt, Router};
 
 use miette::IntoDiagnostic;
+use redis::{FromRedisValue, RedisResult, ToRedisArgs};
+use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnection, SqlitePool, SqliteRow };
 use sqlx::{query, Execute, Executor };
 use uuid::{uuid, Uuid};
@@ -32,6 +34,7 @@ pub struct Page {
     pub url : String
 }
 
+
 #[derive(Debug)]
 pub struct Page_content { 
     pub id: Option<i32>,
@@ -42,7 +45,40 @@ pub struct Page_content {
     pub page_key : Option<i32>
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Key { 
+    pub method: String,
+    pub url : String
+}
 
+
+impl FromRedisValue for Key {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        match v {
+            redis::Value::Data(data) => {
+                let result : Key = serde_json::from_slice(data).unwrap();
+                Ok(result)
+            },
+            _ => Err(redis::RedisError::from((redis::ErrorKind::TypeError, "type error for key")))
+            
+        }
+    }
+}
+impl ToRedisArgs for Key {
+    fn write_redis_args<W>(&self, out: &mut W) 
+    where
+        W: ?Sized + redis::RedisWrite  {
+        let json_bytes = serde_json::to_vec(self).unwrap();
+        out.write_arg(&json_bytes);
+    }
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Value { 
+    pub status: i32,
+    pub headers : String,
+    pub body : String,
+    pub cached_at : String,
+}
 
 impl Serializer<CacheKey> for Page {
     fn serialize(t: CacheKey) -> Self {

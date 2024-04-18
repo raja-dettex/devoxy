@@ -2,27 +2,30 @@ mod cache;
 mod storage;
 
 use core::panic;
-use std::{borrow::Borrow, clone, collections::HashMap, env::vars, error::Error, fs::OpenOptions, hash::Hash, net::SocketAddr, sync::{Arc, Mutex}, thread, time};
+use std::{borrow::Borrow, clone, collections::HashMap, env::vars, error::Error, fs::OpenOptions, hash::Hash, io::Read, net::SocketAddr, sync::{Arc, Mutex}, thread, time};
 use std::time::{SystemTime, Duration};
 use axum::{body::{self, Body, HttpBody,  Bytes}, extract::Host, http::{method, uri::{self, PathAndQuery}, HeaderMap, Request, Response, StatusCode, Uri}, response::IntoResponse, routing::*, RequestExt, Router};
 use miette::IntoDiagnostic;
 use axum::extract::State;
 use reqwest::Method;
 use lazy_static::lazy_static;
-use cache::policy_util::CachePolicy;
-use storage::store::DbStore;
+use cache::{buffer::Buffer, cache::{cacheableBody, RemoteCacheStore}, policy_util::CachePolicy};
+use storage::{serializer::{cached_response_to_value, cachekey_to_key}, store::DbStore};
 use cache::cache_util::{get_from_cache, insert_into_cache, CacheKey, CachedResponse, is_cached};
 
 
 #[derive(Debug, Clone)]
 struct AppState {
-    pub store : DbStore
+    pub store : DbStore,
+    pub cacheStore : RemoteCacheStore,
+    pub memMap : Buffer
 }
 
 
 const PROXY_ORGIN_URI : &'static str = "localhost:3000";
 const PROXY_FROM_DOMAIN : &'static str = "client.hello";
 const DEFAULT_PATH : &'static str = "D:/rust-project/devoxy/devoxx/cache.db";
+//let memory_map = Buffer::new();
 #[tokio::main]
 async fn main() -> Result<(), &'static str> {
     let vars: Vec<_> = std::env::args().collect();
@@ -49,7 +52,10 @@ async fn main() -> Result<(), &'static str> {
         
     };
 
-    let mut app_state = AppState { store : DbStore::new(db_url).await.unwrap()};
+
+    let remote_cache_store = RemoteCacheStore::new("redis://localhost:6379".to_string(), 5);
+    let memMap = Buffer::new();
+    let mut app_state = AppState { store : DbStore::new(db_url).await.unwrap(), cacheStore: remote_cache_store, memMap};
     let cloned_state = app_state.clone();
     let app = Router::new().fallback(|request: Request<Body>| async {
         let response = proxy_handler(request, cloned_state)
@@ -98,7 +104,8 @@ async fn proxy_handler( mut request: Request<Body>, mut state:  AppState) -> Res
 
 async fn get_cached_response( method : Method, url: Uri, req_headers : HeaderMap, mut state : AppState) -> Result<Response<Body>, String> {
     // todo 1.check the cache, if the response is in the cache return here
-        if is_cached(method.clone(), url.clone()) {
+        if state.memMap.is_cached(method.clone(), url.clone()) {
+            println!("found");
             let mut cached_content = state.store.find_page_and_content(CacheKey::new(method.clone(), url.clone())).await;
             let response = get_response(cached_content.status, cached_content.headers, cached_content.body).await.unwrap();
             Ok(response)
@@ -109,6 +116,17 @@ async fn get_cached_response( method : Method, url: Uri, req_headers : HeaderMap
             // .await.map_err(|_| "failed")?;
             // Ok(response)
         } else {
+            let cache_key = CacheKey::new(method.clone(), url.clone());
+            let key = cachekey_to_key(cache_key.clone());
+            let res = state.cacheStore.get(key.clone());
+            if let Ok(cachedResponse) = res { 
+                let status = cachedResponse.status;
+                let headers = cachedResponse.headers;
+                let body = cachedResponse.body;
+                state.memMap.insert_into_cache(method.clone(), url.clone(), status.clone(), headers.clone(), body.clone()).await;
+                let response = get_response(status, headers, body).await.map_err(|err| err.to_string()).unwrap();
+                return Ok(response);
+            }
             let client = reqwest::Client::new();
             let (status, headers, bytes) = client.request(method.clone(), url.clone().to_string()).headers(req_headers.clone()).send().await
                     .map(|r| (r.status(), r.headers().clone(), r.bytes()))
@@ -116,6 +134,16 @@ async fn get_cached_response( method : Method, url: Uri, req_headers : HeaderMap
                     .unwrap();
             
             let body = bytes.await.into_diagnostic().map_err(|_|"failed to parse body");
+            let cachedRespone = CachedResponse::new(status, headers.clone(), body.clone().unwrap(), SystemTime::now());
+            let value  = cached_response_to_value(cachedRespone);
+            println!("key is {:#?} value is {:#?}", key, value);
+            let cacheable = cacheableBody {key, value};
+            println!("cachedable body is {:#?}", cacheable);
+            let result = state.cacheStore.set(cacheable);
+            match result {
+                Ok(str) => println!("added to cache" ),
+                Err(err) => println!("error result : {}", err),
+            }
             let policy = CachePolicy::new(headers.clone());
             if policy.is_cacheable() { 
                 insert_into_cache(method.clone(), url.clone(), status, headers.clone(), body.clone().unwrap());

@@ -1,0 +1,23 @@
+# redis-replica-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-replica
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+      role: replica
+  template:
+    metadata:
+      labels:
+        app: redis
+        role: replica
+    spec:
+      containers:
+      - name: redis
+        image: redis
+        command: ["redis-server", "--slaveof", "redis", "6379"]
+        ports:
+        - containerPort: 6379

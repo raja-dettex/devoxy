@@ -6,7 +6,7 @@ use axum::{body::{self, Body, HttpBody,  Bytes}, extract::Host, http::{method, M
 use crate::cache::policy_util::CachePolicy;
 
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct CacheKey(pub Method,pub Uri);
 
 
